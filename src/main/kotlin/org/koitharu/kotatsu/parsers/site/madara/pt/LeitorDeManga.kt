@@ -84,7 +84,7 @@ internal abstract class MangaCatalogParser(
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val mangaUrl = manga.publicUrl.ifBlank { manga.url.toAbsoluteUrl(domain) }
-		val document = loadRenderedDocument(mangaUrl, DETAILS_SCRIPT)
+		val document = loadRenderedDocument(mangaUrl, DETAILS_SCRIPT, DETAILS_WEBVIEW_TIMEOUT)
 		ensureAccessIsAvailable(document, mangaUrl)
 		val chapterScan = document.selectFirst("[data-kotatsu-chapter-total]")
 		val expectedChapterCount = chapterScan?.attr("data-kotatsu-chapter-total")?.toIntOrNull()
@@ -315,8 +315,8 @@ internal abstract class MangaCatalogParser(
 		return readerGate || verificationChallenge
 	}
 
-	private suspend fun loadRenderedDocument(url: String, script: String): Document {
-		val raw = context.evaluateJs(url, script, WEBVIEW_TIMEOUT)
+	private suspend fun loadRenderedDocument(url: String, script: String, timeout: Long = WEBVIEW_TIMEOUT): Document {
+		val raw = context.evaluateJs(url, script, timeout)
 			?: throw ParseException("Failed to load page", url)
 		val html = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull() ?: raw
 		return Jsoup.parse(html, url)
@@ -327,6 +327,8 @@ internal abstract class MangaCatalogParser(
 	private companion object {
 		const val PAGE_SIZE = 20
 		const val WEBVIEW_TIMEOUT = 45000L
+		// Loading a long chapter list can require dozens of "Carregar mais" requests.
+		const val DETAILS_WEBVIEW_TIMEOUT = 90000L
 		const val DATE_FORMAT_PATTERN = "d 'de' MMM 'de' yyyy"
 		const val DATE_FORMAT_LONG_PATTERN = "d 'de' MMMM 'de' yyyy"
 		val LOCALE_PT_BR = Locale("pt", "BR")
@@ -471,7 +473,7 @@ internal abstract class MangaCatalogParser(
 					return null;
 				}
 				if (links.length > 0 && (total == null || links.length >= total)) return finish(total);
-				if (Date.now() - state.started > 40000) return finish(total);
+				if (Date.now() - state.started > 80000) return finish(total);
 				return null;
 			})()
 		""".trimIndent()
