@@ -14,6 +14,7 @@ import org.koitharu.kotatsu.parsers.model.MangaChapter
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.site.madara.pt.LeitorDeManga
+import org.koitharu.kotatsu.parsers.site.madara.pt.MangasBrasukas
 
 internal class LeitorDeMangaBrowserActionTest {
 
@@ -54,11 +55,45 @@ internal class LeitorDeMangaBrowserActionTest {
 		assertEquals(listOf("https://cdn.example/one-piece/1193/1.jpg"), pages.map { it.url })
 	}
 
+	@Test
+	fun mangasBrasukasReaderPagesUseItsOwnDomain() = runTest {
+		val context = StaticHtmlContext(READER_PAGES)
+		val parser = MangasBrasukas(context)
+
+		val pages = parser.getPages(chapter.copy(
+			url = "/manga/dandadan/1",
+			source = MangaParserSource.MANGASBRASUKAS,
+		))
+
+		assertEquals(listOf("https://cdn.example/one-piece/1193/1.jpg"), pages.map { it.url })
+		assertEquals(MangaParserSource.MANGASBRASUKAS, pages.single().source)
+		assertEquals("https://mangasbrasuka.org/manga/dandadan/1", context.requestedUrl)
+	}
+
+	@Test
+	fun mangasBrasukasReaderInterstitialRequestsManualBrowserAction() = runTest {
+		val parser = MangasBrasukas(StaticHtmlContext(READER_INTERSTITIAL))
+
+		val error = try {
+			parser.getPages(chapter.copy(
+				url = "/manga/dandadan/1",
+				source = MangaParserSource.MANGASBRASUKAS,
+			))
+			throw AssertionError("Expected the reader interstitial to request a manual browser action")
+		} catch (e: BrowserActionRequested) {
+			e
+		}
+
+		assertEquals("https://mangasbrasuka.org/manga/dandadan/1", error.url)
+	}
+
 	private class BrowserActionRequested(val url: String) : RuntimeException()
 
 	private class StaticHtmlContext(private val html: String) : MangaLoaderContext() {
 
 		private val delegate = MangaLoaderContextMock
+		var requestedUrl = ""
+			private set
 
 		override val httpClient get() = delegate.httpClient
 		override val cookieJar get() = delegate.cookieJar
@@ -66,8 +101,10 @@ internal class LeitorDeMangaBrowserActionTest {
 		@Deprecated("Provide a base url")
 		override suspend fun evaluateJs(script: String): String? = evaluateJs("", script, 10_000L)
 
-		override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String =
-			JSONObject.quote(html)
+		override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String {
+			requestedUrl = baseUrl
+			return JSONObject.quote(html)
+		}
 
 		override fun getConfig(source: MangaSource): MangaSourceConfig = delegate.getConfig(source)
 		override fun getDefaultUserAgent(): String = delegate.getDefaultUserAgent()
