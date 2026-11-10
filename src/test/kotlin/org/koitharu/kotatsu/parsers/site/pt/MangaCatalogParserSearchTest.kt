@@ -88,6 +88,23 @@ internal class MangaCatalogParserSearchTest {
 	}
 
 	@Test
+	fun mangaDetailsAllowLongerTimeoutForLazyChapterLists() = runTest {
+		val context = StaticHtmlContext(LIST_RESULT, DETAILS_RESULT)
+		val parser = LeitorDeManga(context)
+		val manga = parser.getList(
+			offset = 0,
+			order = SortOrder.POPULARITY,
+			filter = MangaListFilter(query = "Dandadan"),
+		).single()
+
+		assertEquals(45_000L, context.requestedTimeout)
+
+		parser.getDetails(manga)
+
+		assertEquals(90_000L, context.requestedTimeout)
+	}
+
+	@Test
 	fun detailsFailWhenLazyChapterListIsIncomplete() = runTest {
 		val parser = LeitorDeManga(StaticHtmlContext(LIST_RESULT, INCOMPLETE_DETAILS_RESULT))
 		val manga = parser.getList(
@@ -114,6 +131,8 @@ internal class MangaCatalogParserSearchTest {
 		private val delegate = MangaLoaderContextMock
 		var requestedUrl = ""
 			private set
+		var requestedTimeout = 0L
+			private set
 
 		override val httpClient get() = delegate.httpClient
 		override val cookieJar get() = delegate.cookieJar
@@ -123,6 +142,7 @@ internal class MangaCatalogParserSearchTest {
 
 		override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String {
 			requestedUrl = baseUrl
+			requestedTimeout = timeout
 			val html = if (script.contains("__kazujiMangaCatalogDetailsState")) {
 				detailsHtml ?: listHtml
 			} else {
