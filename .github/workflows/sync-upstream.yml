@@ -1,0 +1,64 @@
+name: Sync upstream parsers
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'Kazuji-Media/kotatsu-parsers-redo' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Integrate upstream if there are no conflicts
+        id: sync
+        env:
+          DISPATCH_TOKEN: ${{ secrets.KAZUJI_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags https://github.com/Kotatsu-Redo/kotatsu-parsers-redo.git master
+          upstream=$(git rev-parse FETCH_HEAD)
+          before=$(git rev-parse HEAD)
+          if git merge-base --is-ancestor "$upstream" "$before"; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "${DISPATCH_TOKEN:-}" ]]; then
+            echo '::error::Configure KAZUJI_DISPATCH_TOKEN before updating the fork.'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git merge --no-edit "$upstream"; then
+            echo '::error::Upstream changes conflict with the fork; resolve them manually.'
+            exit 1
+          fi
+          git push origin HEAD:master
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      # A push made with GITHUB_TOKEN does not start the push-triggered workflow.
+      - name: Trigger Kazuji nightly
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.KAZUJI_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo '::error::Configure KAZUJI_DISPATCH_TOKEN with Contents write access to Kazuji-Media/Kazuji.'
+            exit 1
+          fi
+          gh api --method POST repos/Kazuji-Media/Kazuji/dispatches \
+            -f event_type=parser-updated
