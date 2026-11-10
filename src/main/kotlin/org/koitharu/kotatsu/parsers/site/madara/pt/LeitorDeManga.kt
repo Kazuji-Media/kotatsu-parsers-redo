@@ -320,9 +320,12 @@ internal abstract class MangaCatalogParser(
 
 	private fun requiresManualBrowserAction(document: Document): Boolean {
 		val text = document.body()?.text().orEmpty().lowercase(Locale.ROOT)
-		val readerGate = "um passo para ler" in text && document.select("a[href]").any {
-			it.text().contains("acesse aqui para continuar", ignoreCase = true)
-		}
+		val readerGate = "um passo para ler" in text && (
+			document.select("a[href]").any { it.text().contains("acesse aqui para continuar", ignoreCase = true) } ||
+			("bloqueador detectado" in text && document.select("button").any {
+				it.text().contains("verificar novamente", ignoreCase = true)
+			})
+		)
 		val verificationChallenge = document.selectFirst(MANUAL_ACTION_SELECTORS) != null || listOf(
 			"checking your browser",
 			"verify you are human",

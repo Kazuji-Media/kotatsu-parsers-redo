@@ -33,6 +33,20 @@ internal class LeitorDeMangaBrowserActionTest {
 	}
 
 	@Test
+	fun currentAdBlockerInterstitialRequestsManualBrowserAction() = runTest {
+		val parser = LeitorDeManga(StaticHtmlContext(AD_BLOCKER_INTERSTITIAL))
+
+		val error = try {
+			parser.getPages(chapter)
+			throw AssertionError("Expected the ad blocker interstitial to request a manual browser action")
+		} catch (e: BrowserActionRequested) {
+			e
+		}
+
+		assertEquals("https://leitordemangas.com/manga/one-piece/1193", error.url)
+	}
+
+	@Test
 	fun cloudflareChallengeRequestsManualBrowserAction() = runTest {
 		val parser = LeitorDeManga(StaticHtmlContext(CLOUDFLARE_CHALLENGE))
 
@@ -80,6 +94,23 @@ internal class LeitorDeMangaBrowserActionTest {
 				source = MangaParserSource.MANGASBRASUKAS,
 			))
 			throw AssertionError("Expected the reader interstitial to request a manual browser action")
+		} catch (e: BrowserActionRequested) {
+			e
+		}
+
+		assertEquals("https://mangasbrasuka.org/manga/dandadan/1", error.url)
+	}
+
+	@Test
+	fun mangasBrasukasAdBlockerInterstitialRequestsManualBrowserAction() = runTest {
+		val parser = MangasBrasukas(StaticHtmlContext(AD_BLOCKER_INTERSTITIAL))
+
+		val error = try {
+			parser.getPages(chapter.copy(
+				url = "/manga/dandadan/1",
+				source = MangaParserSource.MANGASBRASUKAS,
+			))
+			throw AssertionError("Expected the ad blocker interstitial to request a manual browser action")
 		} catch (e: BrowserActionRequested) {
 			e
 		}
@@ -142,6 +173,16 @@ internal class LeitorDeMangaBrowserActionTest {
 		const val CLOUDFLARE_CHALLENGE = """
 			<html><body>
 				<form id="challenge-form"><div class="cf-turnstile"></div></form>
+			</body></html>
+		"""
+
+		const val AD_BLOCKER_INTERSTITIAL = """
+			<html><body>
+				<h1>Um passo para ler.</h1>
+				<p>Leia sem anúncios, assine premium no MUGIVERSO.com.</p>
+				<p>Bloqueador detectado</p>
+				<p>O acesso precisa ser concluído para liberar a leitura. Desative o bloqueador neste site e verifique novamente.</p>
+				<button>Verificar novamente</button>
 			</body></html>
 		"""
 
