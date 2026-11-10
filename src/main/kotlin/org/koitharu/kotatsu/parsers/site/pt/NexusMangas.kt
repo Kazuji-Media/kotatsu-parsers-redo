@@ -299,13 +299,14 @@ internal class NexusMangas(context: MangaLoaderContext) :
 		}
 	}
 
-	private fun searchScript(query: String): String = SEARCH_SCRIPT.replace("__NEXUS_QUERY__", JSONObject.quote(query))
+	internal fun searchScript(query: String): String = SEARCH_SCRIPT.replace("__NEXUS_QUERY__", JSONObject.quote(query))
 
 	private fun rankingScript(page: Int): String = RANKING_SCRIPT.replace("__NEXUS_PAGE__", page.toString())
 
 	private companion object {
 		const val PAGE_SIZE = 10
 		const val WEBVIEW_TIMEOUT = 45000L
+		const val SEARCH_EMPTY_STATE_GRACE_MS = 2500
 		val CHAPTER_LINE_REGEX = Regex("(?i)^Cap\\.\\s*([0-9]+(?:[.,][0-9]+)?)(?:\\s*[-–]\\s*(.*))?$")
 		val DATE_REGEX = Regex("\\b\\d{2}/\\d{2}/\\d{4}\\b")
 		val ACTIVE_STATUS_REGEX = Regex("""\bativ[oa]s?\b""")
@@ -411,13 +412,26 @@ internal class NexusMangas(context: MangaLoaderContext) :
 				const finish = () => document.documentElement?.outerHTML || "";
 				const input = document.querySelector('input[type="search"], input[type="text"], input:not([type])');
 				const pageText = text();
-				const hasResultCount = /\b\d+\s+resultados?\b/i.test(pageText) ||
-					/NENHUM RESULTADO/i.test(pageText);
+				const resultCount = pageText.match(/\b(\d+)\s+resultados?\b/i);
+				const hasEmptyResult = resultCount?.[1] === "0" ||
+					(resultCount == null && /NENHUM RESULTADO/i.test(pageText));
 				const inputMatchesQuery = !input ||
 					input.value.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
+				const resultLinks = document.querySelectorAll('a[href*="/obra/"]');
+				const hasHydratedResults = resultLinks.length > 0;
+				if (inputMatchesQuery && hasEmptyResult) {
+					state.emptySince ??= Date.now();
+				} else {
+					state.emptySince = null;
+				}
+				const emptyStateSettled = state.emptySince != null &&
+					Date.now() - state.emptySince >= $SEARCH_EMPTY_STATE_GRACE_MS;
+				const hasLoadedResults = inputMatchesQuery && resultCount != null &&
+					resultCount[1] !== "0" && hasHydratedResults;
 				if (pageText.includes("Realize uma ação para continuar acessando") ||
 					pageText.includes("Acesso a todo o site por 24 horas") ||
-					(inputMatchesQuery && hasResultCount) ||
+					hasLoadedResults ||
+					(inputMatchesQuery && hasEmptyResult && emptyStateSettled) ||
 					Date.now() - state.started > 30000) {
 					return finish();
 				}
