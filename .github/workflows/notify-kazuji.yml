@@ -1,0 +1,25 @@
+name: Notify Kazuji of parser updates
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  notify:
+    if: github.repository == 'Kazuji-Media/kotatsu-parsers-redo' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Kazuji nightly
+        env:
+          GH_TOKEN: ${{ secrets.KAZUJI_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo '::error::Configure KAZUJI_DISPATCH_TOKEN with Contents write access to Kazuji-Media/Kazuji.'
+            exit 1
+          fi
+          gh api --method POST repos/Kazuji-Media/Kazuji/dispatches \
+            -f event_type=parser-updated
