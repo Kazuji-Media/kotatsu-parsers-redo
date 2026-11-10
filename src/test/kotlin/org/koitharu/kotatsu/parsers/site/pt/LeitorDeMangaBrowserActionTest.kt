@@ -14,6 +14,7 @@ import org.koitharu.kotatsu.parsers.model.MangaChapter
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.site.madara.pt.LeitorDeManga
+import org.koitharu.kotatsu.parsers.site.madara.pt.MangasBrasukas
 
 internal class LeitorDeMangaBrowserActionTest {
 
@@ -29,6 +30,35 @@ internal class LeitorDeMangaBrowserActionTest {
 		}
 
 		assertEquals("https://leitordemangas.com/manga/one-piece/1193", error.url)
+	}
+
+	@Test
+	fun adBlockReaderInterstitialRequestsManualBrowserAction() = runTest {
+		val parser = LeitorDeManga(StaticHtmlContext(ADBLOCK_INTERSTITIAL))
+
+		val error = try {
+			parser.getPages(chapter)
+			throw AssertionError("Expected the ad-block reader interstitial to request a manual browser action")
+		} catch (e: BrowserActionRequested) {
+			e
+		}
+
+		assertEquals("https://leitordemangas.com/manga/one-piece/1193", error.url)
+	}
+
+	@Test
+	fun mangasBrasukasAdBlockInterstitialRequestsManualBrowserAction() = runTest {
+		val parser = MangasBrasukas(StaticHtmlContext(ADBLOCK_INTERSTITIAL))
+		val brasukasChapter = chapter.copy(source = MangaParserSource.MANGASBRASUKAS)
+
+		val error = try {
+			parser.getPages(brasukasChapter)
+			throw AssertionError("Expected the Mangas Brasukas reader interstitial to request a manual browser action")
+		} catch (e: BrowserActionRequested) {
+			e
+		}
+
+		assertEquals("https://mangasbrasuka.org/manga/one-piece/1193", error.url)
 	}
 
 	@Test
@@ -99,6 +129,15 @@ internal class LeitorDeMangaBrowserActionTest {
 				<h1>Um passo para ler.</h1>
 				<p>Leia sem anúncios, assine premium no MUGIVERSO.com.</p>
 				<a href="https://redenovax.com/jump/one-piece">Acesse aqui para continuar</a>
+			</body></html>
+		"""
+
+		const val ADBLOCK_INTERSTITIAL = """
+			<html><body>
+				<h1>Um passo para ler.</h1>
+				<div>Bloqueador detectado</div>
+				<p>O acesso precisa ser concluído para liberar a leitura. Desative o bloqueador neste site e verifique novamente.</p>
+				<button>Verificar novamente</button>
 			</body></html>
 		"""
 
