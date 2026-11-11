@@ -9,6 +9,7 @@ import org.jsoup.nodes.Element
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
+import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.ContentRating
 import org.koitharu.kotatsu.parsers.model.Manga
 import org.koitharu.kotatsu.parsers.model.MangaChapter
@@ -33,8 +34,8 @@ internal class HuntersScan(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.HUNTERSSCAN, "readhunters.xyz", pageSize = 50) {
 
 	override val datePattern = "dd/MM/yyyy"
-	override val tagPrefix = "series-genre/"
-	override val listUrl = "series/"
+	override val tagPrefix = "manga-genre/"
+	override val listUrl = "series-2/"
 
 	// Custom HTTP/1.1 client to fix 421 SNI mismatch error
 	private val http11Client = context.httpClient.newBuilder()
@@ -44,7 +45,7 @@ internal class HuntersScan(context: MangaLoaderContext) :
 	// Custom webClient using HTTP/1.1
 	private val http11WebClient = OkHttpWebClient(
 		httpClient = http11Client,
-		mangaSource = source
+		mangaSource = source,
 	)
 
 	override suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
@@ -72,40 +73,35 @@ internal class HuntersScan(context: MangaLoaderContext) :
 
 	private suspend fun fetchAllChapters(manga: Manga): List<MangaChapter> = coroutineScope {
 		val baseUrl = "${manga.url.toAbsoluteUrl(domain).removeSuffix('/')}/ajax/chapters/?t="
-		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
 
-		// Fetch first page using HTTP/1.1 client
 		val firstPageDoc = http11WebClient.httpPost(baseUrl + "1", emptyMap()).parseHtml()
 		val totalPages = extractTotalPages(firstPageDoc)
-		val firstPageChapters = firstPageDoc.select(selectChapter).map { parseChapterElement(it, dateFormat) }
+		val firstPageChapters = parseChapterPage(firstPageDoc, 1, requireChapters = totalPages > 1)
 
 		if (totalPages <= 1) {
-			return@coroutineScope firstPageChapters.mapChapters(reversed = true) { index, chapter ->
-				chapter.copy(number = (firstPageChapters.size - index).toFloat())
-			}
+			return@coroutineScope firstPageChapters.mapChapters(reversed = true) { _, chapter -> chapter }
 		}
 
-		// Fetch remaining pages concurrently using HTTP/1.1 client
-		val remainingPagesChapters = (2..totalPages).chunked(10).flatMap { batch ->
+		val remainingPagesChapters = (2..totalPages).chunked(MAX_PARALLELISM).flatMap { batch ->
 			batch.map { page ->
 				async {
-					try {
-						val doc = http11WebClient.httpPost(baseUrl + page, emptyMap()).parseHtml()
-						doc.select(selectChapter).map {
-							parseChapterElement(it, dateFormat)
-						}
-					} catch (e: Exception) {
-						emptyList()
-					}
+					val doc = http11WebClient.httpPost(baseUrl + page, emptyMap()).parseHtml()
+					parseChapterPage(doc, page, requireChapters = true)
 				}
 			}.awaitAll().flatten()
 		}
 
 		val allChapters = firstPageChapters + remainingPagesChapters
-		allChapters.mapChapters(reversed = true) { index, chapter ->
-			chapter.copy(number = (allChapters.size - index).toFloat())
-		}
+		allChapters.mapChapters(reversed = true) { _, chapter -> chapter }
+	}
 
+	private fun parseChapterPage(doc: Document, page: Int, requireChapters: Boolean): List<MangaChapter> {
+		val elements = doc.select(selectChapter)
+		if (requireChapters && elements.isEmpty()) {
+			throw ParseException("HuntersScan chapter page $page is empty", doc.location())
+		}
+		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
+		return elements.map { parseChapterElement(it, dateFormat) }
 	}
 
 	private fun extractTotalPages(doc: Document): Int {
@@ -117,18 +113,33 @@ internal class HuntersScan(context: MangaLoaderContext) :
 	private fun parseChapterElement(li: Element, dateFormat: SimpleDateFormat): MangaChapter {
 		val a = li.selectFirstOrThrow("a")
 		val href = a.attrAsRelativeUrl("href")
+		val label = a.ownText().ifEmpty { a.text() }.trim()
+		val numberMatch = CHAPTER_NUMBER.find(label) ?: LEADING_NUMBER.find(label)
+		val volumeMatch = VOLUME_NUMBER.find(label)
+		val title = label.replace(CHAPTER_NUMBER, "").replace(VOLUME_NUMBER, "")
+			.replace(LEADING_NUMBER, "").trim(' ', '-', ':', '|', '–', '—').takeIf { it.isNotEmpty() }
 
 		return MangaChapter(
 			id = generateUid(href),
-			title = a.ownText().ifEmpty { a.text() },
-			number = 0f, // Will be set later
-			volume = 0,
+			title = title,
+			number = numberMatch?.groupValues?.get(1)?.replace(',', '.')?.toFloatOrNull() ?: 0f,
+			volume = volumeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0,
 			url = href + stylePage,
 			uploadDate = parseChapterDate(dateFormat, li.selectFirst(selectDate)?.textOrNull()),
 			source = source,
 			scanlator = null,
 			branch = null,
 		)
+	}
+
+	private companion object {
+		const val MAX_PARALLELISM = 4
+		val CHAPTER_NUMBER = Regex(
+			"""\b(?:cap[ií]tulo|cap\.?|chapter|ch\.?)\s*#?\s*(\d+(?:[.,]\d+)?)""",
+			RegexOption.IGNORE_CASE,
+		)
+		val LEADING_NUMBER = Regex("""^\s*#?(\d+(?:[.,]\d+)?)(?=\s|[-:|–—]|$)""")
+		val VOLUME_NUMBER = Regex("""\b(?:volume|vol\.?)\s*(\d+)""", RegexOption.IGNORE_CASE)
 	}
 }
 

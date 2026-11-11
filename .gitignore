@@ -98,3 +98,6 @@ local.properties
 /.idea/copilot.data.migration.edit.xml
 /.gradle-user-home
 /.claude
+
+# Local agent worktrees
+/.worktrees/
