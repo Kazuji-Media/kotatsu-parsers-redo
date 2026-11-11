@@ -54,6 +54,18 @@ internal class MangaCatalogParserSearchTest {
 		assertEquals(MangaParserSource.MANGASBRASUKAS, result.source)
 	}
 
+    @Test
+    fun searchAllowsCardsWithoutCover() = runTest {
+        val html = LIST_RESULT.replace(" data-kotatsu-cover=\"https://cdn.example/dandadan.webp\"", "")
+        val context = StaticHtmlContext(html)
+        val parser = LeitorDeManga(context)
+
+        val result = parser.getList(0, SortOrder.POPULARITY, MangaListFilter(query = "Dandadan")).single()
+
+        assertEquals("Dandadan", result.title)
+        assertTrue(result.coverUrl == null)
+    }
+
 	@Test
 	fun mangasBrasukasBrowseUsesCatalogInsteadOfEmptySearch() = runTest {
 		val context = StaticHtmlContext(LIST_RESULT)

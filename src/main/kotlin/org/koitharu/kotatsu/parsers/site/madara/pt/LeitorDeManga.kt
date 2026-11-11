@@ -24,6 +24,7 @@ import org.koitharu.kotatsu.parsers.model.MangaTag
 import org.koitharu.kotatsu.parsers.model.RATING_UNKNOWN
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.util.attrAsRelativeUrl
+import org.koitharu.kotatsu.parsers.util.attrAsRelativeUrlOrNull
 import org.koitharu.kotatsu.parsers.util.generateUid
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
@@ -203,7 +204,7 @@ internal abstract class MangaCatalogParser(
 			val title = link.attr("data-kotatsu-manga-title").trim().ifEmpty { link.text().trim() }
 			if (url.isEmpty() || title.isEmpty()) return@mapNotNull null
 			val cardText = link.text().lowercase(Locale.ROOT)
-			val cover = link.attrAsRelativeUrl("data-kotatsu-cover").takeIf(String::isNotEmpty)
+			val cover = link.attrAsRelativeUrlOrNull("data-kotatsu-cover")
 			Manga(
 				id = generateUid(url),
 				title = title,
@@ -417,7 +418,7 @@ internal abstract class MangaCatalogParser(
 				} else if (pageMatch) {
 					state.page = Number(pageMatch[1]);
 				}
-				if (state.page >= targetPage) return finish(state.page);
+				if (currentLinks && state.page >= targetPage) return finish(state.page);
 				if (Date.now() - state.started > 30000) return finish(state.page);
 				if (currentLinks) {
 					const next = Array.from(document.querySelectorAll("button"))
@@ -566,7 +567,7 @@ internal abstract class MangaCatalogParser(
 						const links = chapterLinks();
 						observeChapterList();
 						const total = readTotal();
-						if (total != null && links.length === total) {
+						if (total != null && total > 0 && links.length === total) {
 							finish(total, true);
 							return;
 						}
