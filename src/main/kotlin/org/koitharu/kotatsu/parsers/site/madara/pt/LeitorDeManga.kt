@@ -86,14 +86,30 @@ internal abstract class MangaCatalogParser(
 		val mangaUrl = manga.publicUrl.ifBlank { manga.url.toAbsoluteUrl(domain) }
 		val document = loadRenderedDocument(mangaUrl, DETAILS_SCRIPT, DETAILS_WEBVIEW_TIMEOUT)
 		ensureAccessIsAvailable(document, mangaUrl)
-		val chapterScan = document.selectFirst("[data-kotatsu-chapter-total]")
-		val expectedChapterCount = chapterScan?.attr("data-kotatsu-chapter-total")?.toIntOrNull()
-		val capturedChapterCount = chapterScan?.attr("data-kotatsu-chapter-count")?.toIntOrNull()
-		if (expectedChapterCount != null && capturedChapterCount != null && capturedChapterCount < expectedChapterCount) {
+		val chapterScan = document.selectFirst("[data-kotatsu-chapter-count]")
+			?: throw ParseException("$domain did not confirm chapter list completion", mangaUrl)
+		val expectedChapterCount = chapterScan.attr("data-kotatsu-chapter-total").toIntOrNull()
+		val capturedChapterCount = chapterScan.attr("data-kotatsu-chapter-count").toIntOrNull()
+		if (capturedChapterCount == null) {
+			throw ParseException("$domain returned an invalid chapter count", mangaUrl)
+		}
+		if (expectedChapterCount != null && capturedChapterCount < expectedChapterCount) {
 			throw ParseException(
 				"$domain loaded $capturedChapterCount of $expectedChapterCount chapters",
 				mangaUrl,
 			)
+		}
+		if (expectedChapterCount != null && capturedChapterCount > expectedChapterCount) {
+			throw ParseException(
+				"$domain returned $capturedChapterCount chapters but reported $expectedChapterCount",
+				mangaUrl,
+			)
+		}
+		if (chapterScan.attr("data-kotatsu-chapter-complete") == "false") {
+			throw ParseException("$domain returned an incomplete chapter list", mangaUrl)
+		}
+		if (expectedChapterCount == null && chapterScan.attr("data-kotatsu-chapter-complete") != "true") {
+			throw ParseException("$domain did not confirm chapter list completion", mangaUrl)
 		}
 
 		val bodyText = document.body()?.wholeText().orEmpty()
@@ -114,6 +130,13 @@ internal abstract class MangaCatalogParser(
 				)
 			}
 		val author = AUTHOR_REGEX.find(bodyText)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
+		val chapters = parseChapters(document, manga)
+		if (capturedChapterCount != chapters.size) {
+			throw ParseException(
+				"$domain captured $capturedChapterCount chapter links but parsed ${chapters.size}",
+				mangaUrl,
+			)
+		}
 		val coverUrl = document.select("img[alt]")
 			.firstOrNull {
 				it.attr("alt").equals(title, ignoreCase = true) ||
@@ -132,7 +155,7 @@ internal abstract class MangaCatalogParser(
 			state = parseState(allText) ?: manga.state,
 			rating = parseRating(allText.substringBefore("Sinopse")) ?: manga.rating,
 			contentRating = parseContentRating(allText) ?: manga.contentRating,
-			chapters = parseChapters(document, manga),
+			chapters = chapters,
 		)
 	}
 
@@ -418,63 +441,187 @@ internal abstract class MangaCatalogParser(
 			(() => {
 				const key = "__kazujiMangaCatalogDetailsState";
 				const state = window[key] || (window[key] = {
-					started: Date.now(), pending: false, previousCount: 0, pendingSince: 0,
+					started: Date.now(),
+					pending: false,
+					previousCount: 0,
+					pendingSince: 0,
+					linksDirty: true,
+					chapterLinks: [],
+					chapterList: null,
+					observerRoot: null,
+					observer: null,
+					result: null,
+					total: null,
+					totalDirty: true,
+					noMoreSince: 0,
+					growthSeenAt: 0,
+					pumping: false,
+					loadMoreButton: null,
 				});
 				const text = () => document.body?.innerText || "";
-				const chapterLinks = () => Array.from(document.querySelectorAll('a[href]')).filter(link => {
+				const chapterPath = link => {
 					const path = new URL(link.href, location.href).pathname.replace(/\/+$/, "");
 					const work = location.pathname.replace(/\/+$/, "");
 					const chapter = path.startsWith(work + "/") ? path.substring(work.length + 1) : "";
-					return chapter && !chapter.includes("/") && /^\d+(?:[.,]\d+)?(?:-\d+)?$/.test(chapter);
-				});
-				const finish = total => {
-					for (const link of chapterLinks()) {
+					return chapter && !chapter.includes("/") && /^\d+(?:[.,]\d+)?(?:-\d+)?$/.test(chapter)
+						? path
+						: null;
+				};
+				const scanChapterLinks = () => {
+					const lists = Array.from(document.querySelectorAll("ul, ol"))
+						.map(list => {
+							const unique = new Map();
+							for (const link of Array.from(list.querySelectorAll("li a[href]"))) {
+								const path = chapterPath(link);
+								if (path && !unique.has(path)) unique.set(path, link);
+							}
+							return { list, links: Array.from(unique.values()) };
+						})
+						.filter(item => item.links.length > 0)
+						.sort((left, right) => right.links.length - left.links.length);
+					state.chapterList = lists[0]?.list || null;
+					return lists[0]?.links || [];
+				};
+				const chapterLinks = () => {
+					if (!state.observer || state.linksDirty) {
+						state.chapterLinks = scanChapterLinks();
+						state.linksDirty = false;
+						state.totalDirty = true;
+					}
+					return state.chapterLinks;
+				};
+				const observeChapterList = () => {
+					const root = state.chapterList?.parentElement || state.chapterList;
+					if (!root || state.observerRoot === root || typeof MutationObserver === "undefined") return;
+					state.observer?.disconnect();
+					state.observerRoot = root;
+					state.observer = new MutationObserver(() => {
+						state.linksDirty = true;
+						state.totalDirty = true;
+						state.loadMoreButton = null;
+						pump();
+					});
+					state.observer.observe(root, {
+						subtree: true,
+						childList: true,
+						characterData: true,
+						attributes: true,
+					});
+				};
+				const readTotal = () => {
+					if (state.totalDirty) {
+						const match = text().match(/Capítulos?\s*\(\s*(\d+)\s*\)|([0-9]+)\s+capítulos?/i);
+						if (match) state.total = Number(match[1] || match[2]);
+						state.totalDirty = false;
+					}
+					return state.total;
+				};
+				const findLoadMore = () => {
+					if (state.loadMoreButton?.isConnected && /carregar mais/i.test(state.loadMoreButton.innerText || "")) {
+						return state.loadMoreButton;
+					}
+					state.loadMoreButton = Array.from(document.querySelectorAll("button"))
+						.find(button => /carregar mais/i.test(button.innerText || "")) || null;
+					return state.loadMoreButton;
+				};
+				const finish = (total, complete) => {
+					if (state.result) return state.result;
+					const links = scanChapterLinks();
+					state.chapterLinks = links;
+					state.linksDirty = false;
+					for (const link of links) {
 						const path = new URL(link.href, location.href).pathname.replace(/\/+$/, "");
 						const number = path.substring(path.lastIndexOf("/") + 1);
 						const time = link.querySelector("time[datetime]");
 						link.setAttribute("data-kotatsu-chapter-url", path);
 						link.setAttribute("data-kotatsu-chapter-number", number.replace(",", "."));
 						link.setAttribute("data-kotatsu-chapter-text", link.innerText?.trim() || "");
-						if (time?.getAttribute("datetime")) link.setAttribute("data-kotatsu-upload-date", time.getAttribute("datetime"));
+						if (time?.getAttribute("datetime")) {
+							link.setAttribute("data-kotatsu-upload-date", time.getAttribute("datetime"));
+						}
 					}
-					const count = chapterLinks().length;
 					const root = document.documentElement;
 					root.setAttribute("data-kotatsu-chapter-total", total == null ? "" : String(total));
-					root.setAttribute("data-kotatsu-chapter-count", String(count));
+					root.setAttribute("data-kotatsu-chapter-count", String(links.length));
+					root.setAttribute("data-kotatsu-chapter-complete", String(complete));
 					const heading = Array.from(document.querySelectorAll("h1, h2, h3, h4"))
 						.find(item => /sinopse/i.test(item.innerText || ""));
 					const description = heading?.parentElement?.querySelector("p") || heading?.nextElementSibling;
 					if (description?.innerText?.trim()) description.setAttribute("data-kotatsu-description", "");
-					return root.outerHTML || "";
+					state.observer?.disconnect();
+					state.result = root.outerHTML || "";
+					return state.result;
 				};
-				if (/um passo para ler/i.test(text()) ||
-					document.querySelector("#challenge-form, .cf-turnstile")) return finish(null);
-				if (!document.querySelector("h1")) return Date.now() - state.started > 25000 ? finish(null) : null;
-				const totalMatch = text().match(/Capítulos?\s*\(\s*(\d+)\s*\)|([0-9]+)\s+capítulos?/i);
-				const total = totalMatch ? Number(totalMatch[1] || totalMatch[2]) : null;
-				const links = chapterLinks();
-				if (state.pending) {
-					if (links.length > state.previousCount) {
-						state.pending = false;
-					} else if (Date.now() - state.pendingSince > 12000) {
-						return finish(total);
-					} else {
-						return null;
+				function pump() {
+					if (state.result || state.pumping) return;
+					state.pumping = true;
+					try {
+						if (/um passo para ler/i.test(text()) ||
+							document.querySelector("#challenge-form, .cf-turnstile")) {
+							finish(null, false);
+							return;
+						}
+						if (!document.querySelector("h1")) {
+							if (Date.now() - state.started > 25000) finish(null, false);
+							return;
+						}
+						if (!state.observer) state.linksDirty = true;
+						const links = chapterLinks();
+						observeChapterList();
+						const total = readTotal();
+						if (total != null && links.length === total) {
+							finish(total, true);
+							return;
+						}
+						if (total != null && links.length > total) {
+							finish(total, false);
+							return;
+						}
+						if (Date.now() - state.started > 80000) {
+							finish(total, total != null && links.length >= total);
+							return;
+						}
+						if (state.pending) {
+							if (links.length > state.previousCount) {
+								state.pending = false;
+								state.pendingSince = 0;
+								state.growthSeenAt = Date.now();
+								state.noMoreSince = 0;
+								return;
+							} else if (Date.now() - state.pendingSince > 12000) {
+								finish(total, false);
+								return;
+							} else {
+								return;
+							}
+						}
+						if (state.growthSeenAt) {
+							if (Date.now() - state.growthSeenAt < 500) return;
+							state.growthSeenAt = 0;
+						}
+						const loadMore = findLoadMore();
+						if (loadMore && !loadMore.disabled && links.length > 0) {
+							state.noMoreSince = 0;
+							state.previousCount = links.length;
+							state.pending = true;
+							state.pendingSince = Date.now();
+							loadMore.click();
+							return;
+						}
+						if (links.length > 0) {
+							if (!state.noMoreSince) state.noMoreSince = Date.now();
+							if (Date.now() - state.noMoreSince >= 2000) {
+								finish(total, total == null || links.length >= total);
+							}
+							return;
+						}
+						if (Date.now() - state.started > 80000) finish(total, false);
+					} finally {
+						state.pumping = false;
 					}
 				}
-				if (total != null && links.length >= total) return finish(total);
-				const loadMore = Array.from(document.querySelectorAll("button"))
-					.find(button => /carregar mais/i.test(button.innerText || ""));
-				if (loadMore && !loadMore.disabled && links.length > 0) {
-					state.previousCount = links.length;
-					state.pending = true;
-					state.pendingSince = Date.now();
-					loadMore.click();
-					return null;
-				}
-				if (links.length > 0 && (total == null || links.length >= total)) return finish(total);
-				if (Date.now() - state.started > 80000) return finish(total);
-				return null;
+				pump();
+				return state.result;
 			})()
 		""".trimIndent()
 
