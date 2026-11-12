@@ -134,7 +134,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		) {
 			val readerUrl = chapters.first().url.toAbsoluteUrl(domain)
 			val readerDocument = webClient.httpGet(readerUrl).parseHtml()
-			parseChapters(readerDocument).ifEmpty { chapters }
+			(chapters + parseChapters(readerDocument))
+				.distinctBy { it.id }
+				.sortedBy { it.number }
 		} else {
 			chapters
 		}
@@ -161,6 +163,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
 			val href = anchor.attrAsRelativeUrlOrNull("href") ?: return@mapChapters null
 			val path = href.substringBefore('?').trimEnd('/')
 			val label = anchor.text().trim().ifBlank { anchor.attr("title").trim() }
+			if (label.matches(Regex("(?i)^(?:cap[íi]tulo anterior|pr[oó]ximo cap[íi]tulo)$"))) {
+				return@mapChapters null
+			}
 			val number = Regex("(?i)(?:cap(?:ítulo|itulo)?\\.?\\s*)(\\d+(?:[.,]\\d+)?)")
 				.find(label)?.groupValues?.get(1)?.replace(',', '.')?.toFloatOrNull()
 				?: Regex("(\\d+(?:[.,]\\d+)?)").find(path)?.groupValues?.get(1)
@@ -176,7 +181,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 				branch = null,
 				source = source,
 			)
-		}.distinctBy { it.id }
+		}.distinctBy { it.id }.sortedBy { it.number }
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
