@@ -83,12 +83,17 @@ create a Pull Request.
 
 ### Testing
 
-It is recommended that unit tests be run before submitting a PR.
+It is recommended that unit tests be run before submitting a PR. The live parser checks make HTTP requests and
+can be scoped to one or more sources without editing test code:
 
-- Temporary modify the `MangaSources` annotation class: specify your parser(s) name(s) and change mode
-  to `EnumSource.Mode.INCLUDE`
-- Run the `MangaParserTest` (`gradlew :test --tests "org.koitharu.kotatsu.parsers.MangaParserTest"`)
-- Optionally, you can run the `generateTestsReport` gradle task to get a pretty readable html report from test results.
+```shell
+./gradlew test --tests "org.koitharu.kotatsu.parsers.MangaParserTest" -PmangaSources=LEITORDEMANGA
+```
+
+Pass multiple enum names as a comma-separated list, for example
+`-PmangaSources=LEITORDEMANGA,MANGASBRASUKAS`. Names are case-insensitive and must match
+`MangaParserSource`. Without `mangaSources`, the parameterized live checks select no sources. Unknown names fail
+with a message identifying the invalid name.
 
 ## Help
 

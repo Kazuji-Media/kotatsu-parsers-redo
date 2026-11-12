@@ -12,6 +12,7 @@ version = "1.0"
 
 tasks.test {
     useJUnitPlatform()
+    systemProperty("mangaSources", providers.gradleProperty("mangaSources").orElse("").get())
 }
 
 ksp {
