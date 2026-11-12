@@ -187,17 +187,20 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		return links.mapChapters(reversed = true) { _, anchor ->
 			val href = anchor.attrAsRelativeUrlOrNull("href") ?: return@mapChapters null
 			val path = href.substringBefore('?').trimEnd('/')
-			val label = anchor.text().trim().ifBlank { anchor.attr("title").trim() }
-			if (label.matches(Regex("(?i)^(?:cap[íi]tulo anterior|pr[oó]ximo cap[íi]tulo)$"))) {
+			val labels = listOf(anchor.attr("title").trim(), anchor.text().trim())
+			val label = labels.firstOrNull { it.isNotBlank() && !isGenericChapterAction(it) }.orEmpty()
+			if (labels.any { it.matches(Regex("(?i)^(?:cap[íi]tulo anterior|pr[oó]ximo cap[íi]tulo)$")) }) {
 				return@mapChapters null
 			}
-			val number = Regex("(?i)(?:cap(?:ítulo|itulo)?\\.?\\s*)(\\d+(?:[.,]\\d+)?)")
-				.find(label)?.groupValues?.get(1)?.replace(',', '.')?.toFloatOrNull()
-				?: Regex("(\\d+(?:[.,]\\d+)?)").find(path)?.groupValues?.get(1)
-				?.replace(',', '.')?.toFloatOrNull()
+			val chapterNumber = Regex("(?i)(?:cap(?:ítulo|itulo)?\\.?\\s*|cap(?:itulo)?-)(\\d+(?:[.,]\\d+)?)")
+				.find(label)
+				?: Regex("(?i)cap(?:itulo)?-?(\\d+(?:[.,]\\d+)?)").find(path)
+				?: Regex("(\\d+(?:[.,]\\d+)?)").find(path)
+			val numberText = chapterNumber?.groupValues?.get(1)?.replace(',', '.')
+			val number = numberText?.toFloatOrNull()
 			MangaChapter(
 				id = generateUid(path),
-				title = label.ifBlank { null },
+				title = label.takeIf(String::isNotBlank) ?: numberText?.let { "Capítulo $it" },
 				number = number ?: 0f,
 				volume = 0,
 				url = path,
@@ -208,6 +211,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
 			)
 		}.distinctBy { it.id }.sortedBy { it.number }
 	}
+
+	private fun isGenericChapterAction(value: String): Boolean =
+		value.trim().matches(Regex("(?i)^(?:ler(?:\\s+cap[ií]tulo)?|read(?:\\s+chapter)?)$"))
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val url = chapter.url.toAbsoluteUrl(domain)
