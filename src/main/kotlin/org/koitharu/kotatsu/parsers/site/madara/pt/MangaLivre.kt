@@ -69,10 +69,10 @@ internal class MangaLivre(context: MangaLoaderContext) :
 			}
 			if (params.isNotEmpty()) append('?').append(params.joinToString("&"))
 		}
-		return parseMangaList(webClient.httpGet(url).parseHtml())
+		return parseMangaLivreList(webClient.httpGet(url).parseHtml())
 	}
 
-	private fun parseMangaList(document: Document): List<Manga> {
+	private fun parseMangaLivreList(document: Document): List<Manga> {
 		val links = document.select("a[href]").filter { anchor ->
 			val href = anchor.attr("href").substringBefore('?').trimEnd('/')
 			val slug = href.substringAfter(mangaPath, "")
