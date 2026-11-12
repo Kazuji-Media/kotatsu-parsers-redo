@@ -83,12 +83,15 @@ internal class MangaLivre(context: MangaLoaderContext) :
 			val href = anchor.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
 			val path = href.substringBefore('?').trimEnd('/')
 			val card = anchor.parents().firstOrNull { parent ->
+				parent.selectFirst("img") != null && parent.selectFirst("h2, h3, h4") != null
+			} ?: anchor.parents().firstOrNull { parent ->
 				parent.selectFirst("img") != null
 			} ?: anchor.parent() ?: anchor
 			val title = sequenceOf(
-				anchor.attr("title").trim(),
-				anchor.text().trim(),
 				card.selectFirst("h2, h3, h4")?.text()?.trim().orEmpty(),
+				anchor.attr("title").trim().takeUnless(::isGenericMangaLabel).orEmpty(),
+				anchor.text().trim().takeUnless(::isGenericMangaLabel).orEmpty(),
+				path.substringAfterLast('/').replace('-', ' ').replace('_', ' ').trim(),
 			).firstOrNull(String::isNotBlank) ?: return@mapNotNull null
 			val tags = card.select("a[href*='$genrePath']").mapNotNullToSet { tagAnchor ->
 				val tagHref = tagAnchor.attrAsRelativeUrlOrNull("href") ?: return@mapNotNullToSet null
@@ -104,7 +107,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 				altTitles = emptySet(),
 				rating = RATING_UNKNOWN,
 				contentRating = if (isNsfwSource) ContentRating.ADULT else null,
-				coverUrl = card.selectFirst("img")?.src(),
+				coverUrl = (anchor.selectFirst("img") ?: card.selectFirst("img"))?.src(),
 				tags = tags,
 				state = null,
 				authors = emptySet(),
@@ -113,14 +116,31 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		}.distinctBy { it.id }
 	}
 
+	private fun isGenericMangaLabel(value: String): Boolean =
+		value.trim().replace(Regex("^[◆◇♦▣\\s]+|[◆◇♦▣\\s]+$"), "").equals("MANGA", ignoreCase = true)
+
 	override suspend fun getDetails(manga: Manga): Manga {
 		val url = manga.url.toAbsoluteUrl(domain)
 		val document = webClient.httpGet(url).parseHtml()
-		val title = document.selectFirst("h1")?.textOrNull() ?: manga.title
+		val title = document.select("h1, .entry-title, .post-title, .manga-title")
+			.asSequence()
+			.map { it.text().trim() }
+			.firstOrNull {
+				it.isNotBlank() &&
+					!it.equals("MangaLivre", ignoreCase = true) &&
+					!it.equals("Manga Livre", ignoreCase = true)
+			}
+			?: manga.title
+		val synopsisHeading = document.select("h2, h3, h4").firstOrNull {
+				it.text().trim().equals("Sinopse", ignoreCase = true)
+			}
 		val description = document.selectFirst(
 			".synopsis, .manga-synopsis, .description, .manga-description, .entry-content",
-		)?.html() ?: document.selectFirst("h2:contains(Sinopse), h3:contains(Sinopse), h4:contains(Sinopse)")
-			?.parent()?.nextElementSibling()?.html()
+		)?.html()
+			?: synopsisHeading?.nextElementSibling()?.html()
+			?: synopsisHeading?.parent()?.nextElementSibling()?.html()
+			?: document.selectFirst("meta[property=og:description], meta[name=description]")
+				?.attr("content")?.takeIf(String::isNotBlank)
 		val tags = document.select("a[href*='$genrePath']").mapNotNullToSet { anchor ->
 			val href = anchor.attrAsRelativeUrlOrNull("href") ?: return@mapNotNullToSet null
 			val slug = href.substringAfter(genrePath).substringBefore('/').substringBefore('?')
@@ -149,6 +169,11 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		return manga.copy(
 			title = title,
 			publicUrl = url,
+			coverUrl = document.selectFirst(
+				".summary_image img, .manga-cover img, .poster img, .post-thumbnail img, img.wp-post-image",
+			)?.src()
+				?: document.selectFirst("meta[property=og:image]")?.attrAsAbsoluteUrlOrNull("content")
+				?: manga.coverUrl,
 			description = description,
 			tags = tags,
 			chapters = completeChapters,
